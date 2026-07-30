@@ -27,7 +27,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Function;
+import java.util.function.BiFunction;
 import java.util.function.Supplier;
 import javax.annotation.concurrent.ThreadSafe;
 import org.apache.beam.repackaged.core.org.apache.commons.lang3.tuple.Pair;
@@ -119,7 +119,7 @@ public class StreamingWorkScheduler {
       DataflowMapTaskExecutorFactory mapTaskExecutorFactory,
       BoundedQueueExecutor workExecutor,
       ScheduledExecutorService commitFinalizerCleanupExecutor,
-      Function<String, WindmillStateCache.ForComputation> stateCacheFactory,
+      BiFunction<String, String, WindmillStateCache.ForComputation> stateCacheFactory,
       FailureTracker failureTracker,
       WorkFailureProcessor workFailureProcessor,
       StreamingCounters streamingCounters,
@@ -175,8 +175,8 @@ public class StreamingWorkScheduler {
         .setCacheToken(workItem.getCacheToken());
   }
 
-  private static void setLoggingContextComputation(@Nullable String computationId) {
-    DataflowWorkerLoggingMDC.setStageName(computationId);
+  private static void setLoggingContextSystemName(@Nullable String systemName) {
+    DataflowWorkerLoggingMDC.setStageName(systemName);
   }
 
   private static void setLoggingContextWorkId(@Nullable String workLatencyTrackingId) {
@@ -226,9 +226,9 @@ public class StreamingWorkScheduler {
   private void processWork(
       ComputationState computationState, Work work, BoundedQueueExecutorWorkHandle handle) {
     Windmill.WorkItem workItem = work.getWorkItem();
-    String computationId = computationState.getComputationId();
-    LOG.debug("Starting processing for {}:\n{}", computationId, work);
-    setLoggingContextComputation(computationId);
+    String systemName = computationState.getSystemName();
+    LOG.debug("Starting processing for {}:\n{}", systemName, work);
+    setLoggingContextSystemName(systemName);
     KeyTransitionListener keyTransitionListener = createKeyTransitionListener();
     keyTransitionListener.onKeyTransition(null, work);
 
@@ -263,7 +263,7 @@ public class StreamingWorkScheduler {
       recordProcessingStats(workBatch, workItemCommits, executeWorkResult.stateBytesRead());
       LOG.debug("Processing done for work batch size: {}", workBatch.size());
     } catch (Throwable t) {
-      handleProcessWorkFailure(computationState, handle.getWorkBatch(), computationId, work, t);
+      handleProcessWorkFailure(computationState, handle.getWorkBatch(), systemName, work, t);
     } finally {
       List<Work> processedWorkBatch = workBatch != null ? workBatch : ImmutableList.of(work);
       // Update total processing time counters. Updating in finally clause ensures that
@@ -271,7 +271,7 @@ public class StreamingWorkScheduler {
       recordProcessingTime(stageInfo, processedWorkBatch, processingStartTimeNanos);
 
       setLoggingContextWorkId(null);
-      setLoggingContextComputation(null);
+      setLoggingContextSystemName(null);
       sampler.resetForWorkId(work.getLatencyTrackingId());
       for (Work w : processedWorkBatch) {
         w.setProcessingThreadName("");
@@ -456,7 +456,7 @@ public class StreamingWorkScheduler {
   private void handleProcessWorkFailure(
       ComputationState computationState,
       List<Work> failedBatch,
-      String computationId,
+      String systemName,
       Work primaryWork,
       Throwable t) {
     try {
@@ -467,7 +467,7 @@ public class StreamingWorkScheduler {
       }
 
       workFailureProcessor.logAndProcessFailureBatch(
-          computationId,
+          systemName,
           executableWorks,
           t,
           invalidWork ->
