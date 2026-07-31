@@ -175,6 +175,13 @@ public class StreamingWorkScheduler {
         .setCacheToken(workItem.getCacheToken());
   }
 
+  
+  /** Sets the stage name and workId of the Thread executing the {@link Work} for logging. */
+  private static void setUpWorkLoggingContext(String workLatencyTrackingId, String computationId) {
+    setLoggingContextWorkId(workLatencyTrackingId);
+    setLoggingContextComputation(computationId);
+  }
+  
   private static void setLoggingContextSystemName(@Nullable String systemStageName) {
     DataflowWorkerLoggingMDC.setSystemStageName(systemStageName);
   }
