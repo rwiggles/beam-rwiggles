@@ -183,8 +183,9 @@ public class StreamingWorkScheduler {
         .setCacheToken(workItem.getCacheToken());
   }
 
-  private static void setLoggingContextComputation(@Nullable String systemStageName) {
-    DataflowWorkerLoggingMDC.setSystemStageName(systemStageName);
+  private static void setLoggingContextSystemName(@Nullable String systemName) {
+    DataflowWorkerLoggingMDC.setSystemStageName(systemName);
+  }
   }
 
   private static void setLoggingContextWorkId(@Nullable String workLatencyTrackingId) {
@@ -235,6 +236,7 @@ public class StreamingWorkScheduler {
       ComputationState computationState, Work work, BoundedQueueExecutorWorkHandle handle) {
     Windmill.WorkItem workItem = work.getWorkItem();
 <<<<<<< HEAD
+<<<<<<< HEAD
     String systemName = computationState.getSystemName();
     LOG.debug("Starting processing for {}:\n{}", systemName, work);
     setLoggingContextSystemName(systemName);
@@ -242,6 +244,11 @@ public class StreamingWorkScheduler {
     String computationId = computationState.getComputationId();
     LOG.debug("Starting processing for {}:\n{}", computationId, work);
     setLoggingContextComputation(computationState.getSystemName());
+=======
+    String systemName = computationState.getSystemName();
+    LOG.debug("Starting processing for {}:\n{}", systemName, work);
+    setLoggingContextSystemName(systemName);
+>>>>>>> 71a0713015b (Part 3: Switch StreamingWorkScheduler and WorkFailureProcessor logging to systemName)
     KeyTransitionListener keyTransitionListener = createKeyTransitionListener();
     keyTransitionListener.onKeyTransition(null, work);
 
@@ -499,7 +506,7 @@ public class StreamingWorkScheduler {
   private void handleProcessWorkFailure(
       ComputationState computationState,
       List<Work> failedBatch,
-      String computationId,
+      String systemName,
       Work primaryWork,
       Throwable t) {
     try {
@@ -510,7 +517,7 @@ public class StreamingWorkScheduler {
       }
 
       workFailureProcessor.logAndProcessFailureBatch(
-          computationId,
+          systemName,
           executableWorks,
           t,
           invalidWork ->
