@@ -21,7 +21,6 @@ import static org.apache.beam.vendor.guava.v32_1_2_jre.com.google.common.base.Pr
 
 import com.google.api.services.dataflow.model.MapTask;
 import com.google.auto.value.AutoValue;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentMap;
@@ -88,7 +87,7 @@ public class StreamingWorkScheduler {
   private final ConcurrentMap<String, StageInfo> stageInfoMap;
   private final DataflowExecutionStateSampler sampler;
   private final BoundedQueueExecutor workExecutor;
-  private final MultiKeyBundleOptions multiKeyBundleOptions;
+  private final boolean hotKeyLoggingEnabled;
 
   public StreamingWorkScheduler(
       Supplier<Instant> clock,
@@ -99,7 +98,8 @@ public class StreamingWorkScheduler {
       StreamingCounters streamingCounters,
       ConcurrentMap<String, StageInfo> stageInfoMap,
       DataflowExecutionStateSampler sampler,
-      MultiKeyBundleOptions multiKeyBundleOptions) {
+      StreamingGlobalConfigHandle globalConfigHandle,
+      boolean hotKeyLoggingEnabled) {
     this.clock = clock;
     this.workExecutor = workExecutor;
     this.computationWorkExecutorFactory = computationWorkExecutorFactory;
@@ -108,7 +108,8 @@ public class StreamingWorkScheduler {
     this.streamingCounters = streamingCounters;
     this.stageInfoMap = stageInfoMap;
     this.sampler = sampler;
-    this.multiKeyBundleOptions = multiKeyBundleOptions;
+    this.globalConfigHandle = globalConfigHandle;
+    this.hotKeyLoggingEnabled = hotKeyLoggingEnabled;
   }
 
   public static StreamingWorkScheduler create(
@@ -146,6 +147,12 @@ public class StreamingWorkScheduler {
             sideInputStateFetcherFactory,
             multiKeyBundleOptions);
 
+    List<String> experiments = options.getExperiments();
+    boolean hotKeyLoggingEnabled =
+        options.isHotKeyLoggingEnabled()
+            || (experiments != null
+                && experiments.stream().anyMatch("enable_hot_key_logging"::equalsIgnoreCase));
+
     return new StreamingWorkScheduler(
         clock,
         workExecutor,
@@ -155,7 +162,8 @@ public class StreamingWorkScheduler {
         streamingCounters,
         stageInfoMap,
         sampler,
-        multiKeyBundleOptions);
+        globalConfigHandle,
+        hotKeyLoggingEnabled);
   }
 
   private static long computeShuffleBytesRead(Windmill.WorkItem workItem) {
@@ -175,14 +183,7 @@ public class StreamingWorkScheduler {
         .setCacheToken(workItem.getCacheToken());
   }
 
-  
-  /** Sets the stage name and workId of the Thread executing the {@link Work} for logging. */
-  private static void setUpWorkLoggingContext(String workLatencyTrackingId, String computationId) {
-    setLoggingContextWorkId(workLatencyTrackingId);
-    setLoggingContextComputation(computationId);
-  }
-  
-  private static void setLoggingContextSystemName(@Nullable String systemStageName) {
+  private static void setLoggingContextComputation(@Nullable String systemStageName) {
     DataflowWorkerLoggingMDC.setSystemStageName(systemStageName);
   }
 
@@ -233,9 +234,14 @@ public class StreamingWorkScheduler {
   private void processWork(
       ComputationState computationState, Work work, BoundedQueueExecutorWorkHandle handle) {
     Windmill.WorkItem workItem = work.getWorkItem();
+<<<<<<< HEAD
     String systemName = computationState.getSystemName();
     LOG.debug("Starting processing for {}:\n{}", systemName, work);
     setLoggingContextSystemName(systemName);
+=======
+    String computationId = computationState.getComputationId();
+    LOG.debug("Starting processing for {}:\n{}", computationId, work);
+    setLoggingContextComputation(computationState.getSystemName());
     KeyTransitionListener keyTransitionListener = createKeyTransitionListener();
     keyTransitionListener.onKeyTransition(null, work);
 
@@ -284,6 +290,32 @@ public class StreamingWorkScheduler {
         w.setProcessingThreadName("");
       }
     }
+  }
+
+  private Windmill.WorkItemCommitRequest validateCommitRequestSize(
+      Windmill.WorkItemCommitRequest commitRequest, String stageName, Windmill.WorkItem workItem) {
+    long byteLimit = globalConfigHandle.getConfig().operationalLimits().getMaxWorkItemCommitBytes();
+    int commitSize = commitRequest.getSerializedSize();
+    int estimatedCommitSize = commitSize < 0 ? Integer.MAX_VALUE : commitSize;
+
+    // Detect overflow of integer serialized size or if the byte limit was exceeded.
+    // Commit is too large if overflow has occurred or the commitSize has exceeded the allowed
+    // commit byte limit.
+    streamingCounters.windmillMaxObservedWorkItemCommitBytes().addValue(estimatedCommitSize);
+    if (commitSize >= 0 && commitSize < byteLimit) {
+      return commitRequest;
+    }
+
+    KeyCommitTooLargeException e =
+        KeyCommitTooLargeException.causedBy(
+            stageName, byteLimit, commitRequest, hotKeyLoggingEnabled);
+    failureTracker.trackFailure(stageName, workItem, e);
+    LOG.error("{}", e.toString());
+
+    // Drop the current request in favor of a new, minimal one requesting truncation.
+    // Messages, timers, counters, and other commit content will not be used by the service
+    // so, we're purposefully dropping them here
+    return buildWorkItemTruncationRequest(workItem.getKey(), workItem, estimatedCommitSize);
   }
 
   private void recordProcessingStats(
@@ -451,6 +483,10 @@ public class StreamingWorkScheduler {
 
   private void commitSingleKeyWork(
       ComputationState computationState, Work work, Windmill.WorkItemCommitRequest commitRequest) {
+    // Validate the commit request, possibly requesting truncation if the commitSize is too large.
+    Windmill.WorkItemCommitRequest validatedCommitRequest =
+        validateCommitRequestSize(
+            commitRequest, computationState.getMapTask().getSystemName(), work.getWorkItem());
     work.setState(Work.State.COMMIT_QUEUED);
     Windmill.WorkItemCommitRequest commitRequestWithAttributions =
         commitRequest
@@ -463,7 +499,7 @@ public class StreamingWorkScheduler {
   private void handleProcessWorkFailure(
       ComputationState computationState,
       List<Work> failedBatch,
-      String systemName,
+      String computationId,
       Work primaryWork,
       Throwable t) {
     try {
@@ -474,7 +510,7 @@ public class StreamingWorkScheduler {
       }
 
       workFailureProcessor.logAndProcessFailureBatch(
-          systemName,
+          computationId,
           executableWorks,
           t,
           invalidWork ->
