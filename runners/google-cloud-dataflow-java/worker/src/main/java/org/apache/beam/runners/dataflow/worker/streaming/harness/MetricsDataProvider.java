@@ -59,6 +59,8 @@ class MetricsDataProvider implements StatusDataProvider {
 
     writer.println("Active Keys: <br>");
     for (ComputationState computationState : allComputationStates.get()) {
+      writer.print(computationState.getSystemName());
+      writer.print(" (");
       writer.print(computationState.getComputationId());
       writer.print(" (");
       writer.print(computationState.getSystemName());
