@@ -186,7 +186,6 @@ public class StreamingWorkScheduler {
   private static void setLoggingContextSystemName(@Nullable String systemName) {
     DataflowWorkerLoggingMDC.setSystemStageName(systemName);
   }
-  }
 
   private static void setLoggingContextWorkId(@Nullable String workLatencyTrackingId) {
     DataflowWorkerLoggingMDC.setWorkId(workLatencyTrackingId);
